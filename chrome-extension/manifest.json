@@ -1,0 +1,16 @@
+{
+  "manifest_version": 2,
+
+  "name": "Web ADB",
+  "description": "Tools for working with Android devices over the debug bridge.",
+  "version": "0.1",
+
+  "background": {
+    "scripts": ["script.js"]
+  },
+
+  "permissions": [
+  	"contextMenus",
+  	"nativeMessaging"
+  ]
+}
