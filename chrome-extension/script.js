@@ -41,7 +41,7 @@ function createContextMenuForDevice(device) {
 
   deviceMenuId = chrome.contextMenus.create({
     "title": title,
-    "contexts": ["page","link"]
+    "contexts": ALL_CONTEXTS
   });
   chrome.contextMenus.create({
     "title": "Open this page on device",
@@ -59,7 +59,10 @@ function createContextMenuForDevice(device) {
 
 function rebuildContextMenus(devices) {
   chrome.contextMenus.removeAll(function() {
-    createContextMenuForDevice(null);
+    if (devices.length > 1) {
+      // Prepend All Devices menu.
+      createContextMenuForDevice(null);
+    }
 
     for (var device of devices) {
       createContextMenuForDevice(device);
