@@ -6,40 +6,37 @@
 // Native messaging docs: https://developer.chrome.com/extensions/nativeMessaging
 
 // Connection to native host.
+"use strict";
+
 var port = null;
 
 const ALL_CONTEXTS = ["page","selection","link","editable","image","video","audio"];
 
-function runCommand(device, command, args) {
-    var serial = device ? device.Serial : null;
-    port.postMessage({
-      "command": "run-command",
-      "device_serial": serial,
-      "params": {
-        "command": command,
-        "args": args
-      }
-    });
-}
-
 function openSelfOnDevice(device) {
-  return function(info) {
-    var serial = device ? device.Serial : null
-    runCommand(device, "am", ["start", "-a", "android.intent.action.VIEW", "-d", info.pageUrl]);
+  return info => {
+    client.runCommand(device, "am", ["start", "-a", "android.intent.action.VIEW", "-d", info.pageUrl]);
   };
 }
 
 function openLinkOnDevice(device) {
-  return function(info) {
-    var serial = device ? device.Serial : null
-    runCommand(device, "am", ["start", "-a", "android.intent.action.VIEW", "-d", info.linkUrl]);
+  return info => {
+    client.runCommand(device, "am", ["start", "-a", "android.intent.action.VIEW", "-d", info.linkUrl]);
+  };
+}
+
+function saveLinkToDevice(device) {
+  return info => {
+//    client.
   };
 }
 
 function createContextMenuForDevice(device) {
-  var title = device ? device.Model : "All Devices"
+  if (!device) {
+    throw "null device";
+  }
 
-  deviceMenuId = chrome.contextMenus.create({
+  let title = device.Model
+  let deviceMenuId = chrome.contextMenus.create({
     "title": title,
     "contexts": ["page","link"]
   });
@@ -48,42 +45,107 @@ function createContextMenuForDevice(device) {
     "contexts": ALL_CONTEXTS,
     "parentId": deviceMenuId,
     "onclick": openSelfOnDevice(device)
-  })
+  });
   chrome.contextMenus.create({
     "title": "Open link on device",
     "contexts": ["link"],
     "parentId": deviceMenuId,
     "onclick": openLinkOnDevice(device)
-  })
+  });
+  chrome.contextMenus.create({
+    "title": "Save link to device",
+    "contexts": ["link"],
+    "parentId": deviceMenuId,
+    "onclick": saveLinkToDevice(device)
+  });
 }
 
 function rebuildContextMenus(devices) {
   chrome.contextMenus.removeAll(function() {
-    createContextMenuForDevice(null);
-
     for (var device of devices) {
       createContextMenuForDevice(device);
     }
   });
 }
 
-function handleResponse(resp) {
-  if (resp.command === "list-devices") {
-    var devices = resp.data.devices;
-    rebuildContextMenus(devices);
+class ProxyClient {
+  constructor() {
+    let port = chrome.runtime.connectNative("com.zachklipp.adb.nativeproxy");
+    this.port = port;
+
+    this.address = new Promise((resolve, reject) => {
+      port.onMessage.addListener(msg => {
+        console.log(msg);
+        resolve(msg);
+      });
+
+      port.onDisconnect.addListener(() => {
+        reject("port disconnected");
+      });
+    });
+  }
+
+  path(path) {
+    return this.address.then(addr => `http://${addr}${path}`);
+  }
+
+  fetch(path, init) {
+    return this.path(path).then(addr => fetch(addr, init));
+  }
+
+  listDevices() {
+    return this.fetch("/devices")
+      .then(resp => {
+        if (resp.ok) {
+          return resp.json();
+        }
+        throw Promise.resolve(resp.text());
+      });
+  }
+
+  // Invokes onDeviceCallback with device change events.
+  watchDevices(onDeviceCallback, onErrorCallback) {
+    this.path("/devices")
+      .then(addr => {
+        var evtSrc = new EventSource(addr);
+
+        evtSrc.onmessage = e => {
+          var data = JSON.parse(e.data);
+          if (data.type === "error") {
+            onErrorCallback(data.data);
+          } else {
+            onDeviceCallback(data);
+          }
+        };
+
+        evtSrc.onerror = onErrorCallback;
+      })
+      .catch(onErrorCallback);
+  }
+
+  runCommand(device, cmd, args) {
+    return this.fetch(`/devices/${device.Serial}/execute`, {
+      "method": "POST",
+      "body": JSON.stringify({
+        "command": cmd,
+        "args": args
+      })
+    })
+    .then(resp => {
+      if (resp.ok) {
+        return resp.text();
+      }
+      throw Promise.resolve(resp.text());
+    });
   }
 }
 
-port = chrome.runtime.connectNative("com.zachklipp.adb.nativeproxy");
-port.onMessage.addListener(function(msg) {
-  if (msg.success) {
-    console.log("command successful: ", msg)
-    handleResponse(msg)
-  } else {
-    console.log("command failed: ", msg.error)
-  }
-});
-port.onDisconnect.addListener(function() {
-  console.log("Port Disconnected");
-});
-port.postMessage({ command: "list-devices" });
+let client = new ProxyClient();
+client.listDevices().then(r => console.log(r));
+client.listDevices().then(devices => rebuildContextMenus(devices));
+client.watchDevices(ev => {
+  console.log("device connection event:", ev);
+  client.listDevices().then(rebuildContextMenus);
+}, e => console.log("error listening for device changes", e));
+
+setTimeout(() => console.log(client), 1000);
